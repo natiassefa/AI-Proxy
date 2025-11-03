@@ -40,6 +40,7 @@ export async function registerChatRoute(app: FastifyInstance) {
     const { provider, model, messages } = parsed.data;
     const cacheKey = `${provider}:${model}:${JSON.stringify(messages)}`;
 
+    // Try to get from cache (returns null if Redis is not configured)
     const cached = await cache.get(cacheKey);
     if (cached) {
       logger.info(`Cache hit for ${provider}:${model}`);
@@ -48,7 +49,10 @@ export async function registerChatRoute(app: FastifyInstance) {
 
     try {
       const response = await handleProviderRequest(provider, model, messages);
+
+      // Try to cache the response (does nothing if Redis is not configured)
       await cache.set(cacheKey, JSON.stringify(response), 600);
+
       return res.send(response);
     } catch (err: any) {
       logger.error(err);
