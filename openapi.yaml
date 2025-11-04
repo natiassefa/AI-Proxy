@@ -1,0 +1,802 @@
+openapi: 3.0.3
+info:
+  title: AI Proxy Server API
+  description: |
+    A unified API gateway for OpenAI, Anthropic, and Mistral AI with intelligent caching, 
+    comprehensive cost tracking, and MCP (Model Context Protocol) server integration.
+
+    ## Features
+    - Multi-provider support (OpenAI, Anthropic, Mistral)
+    - Streaming support via Server-Sent Events (SSE)
+    - MCP server integration for automatic tool execution
+    - Intelligent caching with Redis
+    - Cost tracking per request
+  version: 0.2.0
+  contact:
+    name: AI Proxy
+    url: https://github.com/natiassefa/AI-Proxy
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.example.com
+    description: Production server (example)
+
+tags:
+  - name: Health
+    description: Health check and service status
+  - name: Chat
+    description: Chat completions with AI providers
+  - name: MCP
+    description: Model Context Protocol server management and tools
+
+paths:
+  /:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns the health status of the API service and MCP server status
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                service: AI Proxy
+                mcp:
+                  enabled: true
+                  serverCount: 2
+                  toolCount: 15
+
+  /v1/chat:
+    post:
+      tags:
+        - Chat
+      summary: Chat completions
+      description: |
+        Send a chat completion request to one of the supported AI providers (OpenAI, Anthropic, or Mistral).
+
+        Supports both streaming (SSE) and non-streaming responses. Use the `stream` parameter or query parameter to enable streaming.
+
+        When `useMcpTools` is set to `true`, all available MCP tools will be automatically included in the request and executed when the model requests them.
+      operationId: chatCompletions
+      parameters:
+        - name: stream
+          in: query
+          description: Enable streaming response (Server-Sent Events)
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            examples:
+              basic:
+                summary: Basic chat request
+                value:
+                  provider: openai
+                  model: gpt-4o
+                  messages:
+                    - role: user
+                      content: Hello, how are you?
+              with_streaming:
+                summary: Streaming chat request
+                value:
+                  provider: anthropic
+                  model: claude-3-5-sonnet-20241022
+                  messages:
+                    - role: user
+                      content: Explain quantum computing
+                  stream: true
+              with_mcp_tools:
+                summary: Chat with MCP tools enabled
+                value:
+                  provider: openai
+                  model: gpt-4o
+                  messages:
+                    - role: user
+                      content: List the files in the current directory
+                  useMcpTools: true
+              with_custom_tools:
+                summary: Chat with custom tools
+                value:
+                  provider: openai
+                  model: gpt-4o
+                  messages:
+                    - role: user
+                      content: What's the weather in San Francisco?
+                  tools:
+                    - type: function
+                      function:
+                        name: get_weather
+                        description: Get the current weather for a location
+                        parameters:
+                          type: object
+                          properties:
+                            location:
+                              type: string
+                              description: The city and state, e.g. San Francisco, CA
+                          required:
+                            - location
+      responses:
+        "200":
+          description: |
+            Successful response. The content type depends on whether streaming is enabled:
+            - **Non-streaming**: Returns `application/json` with `ChatResponse` schema
+            - **Streaming**: Returns `text/event-stream` with Server-Sent Events format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+              example:
+                provider: openai
+                message: Hello! I'm doing well, thank you for asking.
+                usage:
+                  prompt_tokens: 10
+                  completion_tokens: 20
+                  total_tokens: 30
+                cost: 0.00015
+                latency_ms: 1250
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream with chat completion chunks
+              example: |
+                data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+
+                data: [DONE]
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/mcp/tools:
+    get:
+      tags:
+        - MCP
+      summary: List all MCP tools
+      description: Returns a list of all available tools from all configured MCP servers
+      operationId: listMcpTools
+      responses:
+        "200":
+          description: List of MCP tools
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpToolsListResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+  /v1/mcp/tools/{name}:
+    get:
+      tags:
+        - MCP
+      summary: Get MCP tool information
+      description: Returns detailed information about a specific MCP tool
+      operationId: getMcpTool
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The name of the tool
+          schema:
+            type: string
+          example: read_file
+      responses:
+        "200":
+          description: Tool information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpToolResponse"
+        "404":
+          description: Tool not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+  /v1/mcp/tools/{name}/call:
+    post:
+      tags:
+        - MCP
+      summary: Call an MCP tool
+      description: Execute an MCP tool directly (useful for testing)
+      operationId: callMcpTool
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The name of the tool to call
+          schema:
+            type: string
+          example: read_file
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpToolCallRequest"
+            example:
+              arguments:
+                path: /path/to/file.txt
+      responses:
+        "200":
+          description: Tool execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpToolCallResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tool not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Tool execution failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+  /v1/mcp/servers:
+    get:
+      tags:
+        - MCP
+      summary: List MCP servers
+      description: Returns a list of all configured MCP servers and their status
+      operationId: listMcpServers
+      responses:
+        "200":
+          description: List of MCP servers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpServersListResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+  /v1/mcp/{serverName}/tools:
+    get:
+      tags:
+        - MCP
+      summary: Get tools for a specific server
+      description: Returns all tools available from a specific MCP server
+      operationId: getServerTools
+      parameters:
+        - name: serverName
+          in: path
+          required: true
+          description: The name of the MCP server
+          schema:
+            type: string
+          example: filesystem
+      responses:
+        "200":
+          description: Server tools
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpServerToolsResponse"
+        "404":
+          description: Server not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+  /v1/mcp/servers/{serverName}/tools:
+    get:
+      tags:
+        - MCP
+      summary: Get tools for a specific server (alternative route)
+      description: Alternative route to get tools for a specific MCP server. Same as `/v1/mcp/{serverName}/tools`.
+      operationId: getServerToolsAlt
+      parameters:
+        - name: serverName
+          in: path
+          required: true
+          description: The name of the MCP server
+          schema:
+            type: string
+          example: filesystem
+      responses:
+        "200":
+          description: Server tools
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpServerToolsResponse"
+        "404":
+          description: Server not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: MCP not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - service
+        - mcp
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: AI Proxy
+        mcp:
+          type: object
+          required:
+            - enabled
+          properties:
+            enabled:
+              type: boolean
+              description: Whether MCP is enabled
+            serverCount:
+              type: integer
+              description: Number of configured MCP servers
+            toolCount:
+              type: integer
+              description: Total number of available MCP tools
+
+    ChatRequest:
+      type: object
+      required:
+        - provider
+        - model
+        - messages
+      properties:
+        provider:
+          type: string
+          enum:
+            - openai
+            - anthropic
+            - mistral
+          description: The AI provider to use
+        model:
+          type: string
+          description: The model to use (e.g., gpt-4o, claude-3-5-sonnet-20241022)
+          example: gpt-4o
+        messages:
+          type: array
+          description: Array of conversation messages
+          items:
+            $ref: "#/components/schemas/Message"
+        stream:
+          type: boolean
+          description: Whether to stream the response (Server-Sent Events)
+          default: false
+        tools:
+          type: array
+          description: Custom tools to include in the request
+          items:
+            $ref: "#/components/schemas/Tool"
+        useMcpTools:
+          type: boolean
+          description: Whether to automatically include MCP tools
+          default: false
+
+    Message:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum:
+            - system
+            - user
+            - assistant
+            - tool
+          description: The role of the message sender
+        content:
+          type: string
+          description: The message content
+        tool_calls:
+          type: array
+          description: Tool calls made by the assistant (for assistant messages)
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        tool_call_id:
+          type: string
+          description: The ID of the tool call this message is responding to (for tool messages)
+        name:
+          type: string
+          description: The name of the tool that produced this message (for tool messages)
+
+    ToolCall:
+      type: object
+      required:
+        - id
+        - type
+        - function
+      properties:
+        id:
+          type: string
+          description: The ID of the tool call
+        type:
+          type: string
+          enum:
+            - function
+          description: The type of tool call
+        function:
+          type: object
+          required:
+            - name
+            - arguments
+          properties:
+            name:
+              type: string
+              description: The name of the function to call
+            arguments:
+              type: string
+              description: JSON string of function arguments
+
+    Tool:
+      type: object
+      required:
+        - type
+        - function
+      properties:
+        type:
+          type: string
+          enum:
+            - function
+          description: The type of tool
+        function:
+          type: object
+          required:
+            - name
+            - description
+            - parameters
+          properties:
+            name:
+              type: string
+              description: The name of the function
+            description:
+              type: string
+              description: A description of what the function does
+            parameters:
+              type: object
+              description: JSON Schema for the function parameters
+              additionalProperties: true
+
+    ChatResponse:
+      type: object
+      required:
+        - provider
+        - message
+        - usage
+        - cost
+        - latency_ms
+      properties:
+        provider:
+          type: string
+          description: The AI provider used
+          example: openai
+        message:
+          type: string
+          description: The assistant's response message
+          example: Hello! I'm doing well, thank you for asking.
+        usage:
+          $ref: "#/components/schemas/Usage"
+        cost:
+          type: number
+          format: float
+          description: Estimated cost in USD
+          example: 0.00015
+        latency_ms:
+          type: integer
+          description: Request latency in milliseconds
+          example: 1250
+        tool_calls:
+          type: array
+          description: Tool calls made by the model (if any)
+          items:
+            $ref: "#/components/schemas/ToolCall"
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+          description: Number of tokens in the prompt
+          example: 10
+        completion_tokens:
+          type: integer
+          description: Number of tokens in the completion
+          example: 20
+        total_tokens:
+          type: integer
+          description: Total number of tokens
+          example: 30
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        message:
+          type: string
+          description: Additional error details
+        details:
+          type: object
+          description: Additional error information
+        detail:
+          type: string
+          description: Error detail (alternative field name)
+
+    McpErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: MCP not available
+        message:
+          type: string
+          example: No MCP servers configured
+
+    McpToolsListResponse:
+      type: object
+      required:
+        - tools
+      properties:
+        tools:
+          type: array
+          description: List of available MCP tools
+          items:
+            $ref: "#/components/schemas/McpToolInfo"
+
+    McpToolInfo:
+      type: object
+      required:
+        - name
+        - server
+        - inputSchema
+      properties:
+        name:
+          type: string
+          description: The name of the tool
+          example: read_file
+        description:
+          type: string
+          description: A description of what the tool does
+          example: Reads a file from the filesystem
+        server:
+          type: string
+          description: The MCP server that provides this tool
+          example: filesystem
+        inputSchema:
+          type: object
+          description: JSON Schema for the tool's input parameters
+          additionalProperties: true
+
+    McpToolResponse:
+      type: object
+      required:
+        - name
+        - server
+        - inputSchema
+      properties:
+        name:
+          type: string
+          description: The name of the tool
+        description:
+          type: string
+          description: A description of what the tool does
+        server:
+          type: string
+          description: The MCP server that provides this tool
+        inputSchema:
+          type: object
+          description: JSON Schema for the tool's input parameters
+          additionalProperties: true
+
+    McpToolCallRequest:
+      type: object
+      properties:
+        arguments:
+          type: object
+          description: Arguments to pass to the tool
+          additionalProperties: true
+
+    McpToolCallResponse:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: array
+          description: Array of content blocks returned by the tool
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum:
+                  - text
+                  - image
+                  - resource
+              text:
+                type: string
+                description: "Text content (for type: text)"
+              data:
+                type: string
+                description: "Base64 encoded data (for type: image)"
+              mimeType:
+                type: string
+                description: MIME type of the content
+              uri:
+                type: string
+                description: "URI of the resource (for type: resource)"
+        isError:
+          type: boolean
+          description: Whether the result represents an error
+          default: false
+
+    McpServersListResponse:
+      type: object
+      required:
+        - servers
+      properties:
+        servers:
+          type: array
+          description: List of configured MCP servers
+          items:
+            $ref: "#/components/schemas/McpServerInfo"
+
+    McpServerInfo:
+      type: object
+      required:
+        - name
+        - state
+        - toolCount
+      properties:
+        name:
+          type: string
+          description: The name of the MCP server
+          example: filesystem
+        state:
+          type: string
+          enum:
+            - disconnected
+            - connecting
+            - initializing
+            - ready
+            - error
+          description: Current state of the server connection
+          example: ready
+        info:
+          type: object
+          nullable: true
+          description: Server information (null if not initialized)
+          properties:
+            name:
+              type: string
+              description: Server name
+            version:
+              type: string
+              description: Server version
+        toolCount:
+          type: integer
+          description: Number of tools provided by this server
+          example: 5
+
+    McpServerToolsResponse:
+      type: object
+      required:
+        - server
+        - state
+        - tools
+        - toolCount
+      properties:
+        server:
+          type: string
+          description: The name of the MCP server
+        state:
+          type: string
+          enum:
+            - disconnected
+            - connecting
+            - initializing
+            - ready
+            - error
+          description: Current state of the server connection
+        info:
+          type: object
+          nullable: true
+          description: Server information
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+        tools:
+          type: array
+          description: Tools provided by this server
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              description:
+                type: string
+              inputSchema:
+                type: object
+                additionalProperties: true
+        toolCount:
+          type: integer
+          description: Number of tools

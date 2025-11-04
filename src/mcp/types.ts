@@ -123,6 +123,9 @@ export type MCPServerConfig = {
   env?: Record<string, string>; // For stdio transport
   url?: string; // For HTTP/SSE transport
   headers?: Record<string, string>; // For HTTP/SSE transport
+  timeout?: number; // Optional timeout in milliseconds (default: 30000)
+  reconnectDelay?: number; // For SSE: initial reconnect delay in ms (default: 1000)
+  maxReconnectAttempts?: number; // For SSE: max reconnect attempts (default: 5)
 };
 
 // MCP Client State
