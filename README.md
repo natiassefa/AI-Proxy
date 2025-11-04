@@ -2,6 +2,8 @@
 
 A unified Node.js API gateway for **OpenAI**, **Anthropic**, and **Mistral** with intelligent caching, comprehensive cost tracking, and error normalization. Built with TypeScript and Fastify.
 
+**Repository**: [https://github.com/natiassefa/AI-Proxy](https://github.com/natiassefa/AI-Proxy)
+
 ## ✨ Features
 
 - **Multi-Provider Support**: Unified interface for OpenAI, Anthropic (Claude), and Mistral AI
@@ -25,7 +27,7 @@ A unified Node.js API gateway for **OpenAI**, **Anthropic**, and **Mistral** wit
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/natiassefa/AI-Proxy.git
 cd AI-Proxy
 
 # Install dependencies
@@ -477,7 +479,7 @@ Feel free to open an issue for:
 
 ## 📝 License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
