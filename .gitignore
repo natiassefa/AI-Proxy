@@ -83,6 +83,8 @@ temp/
 .next/
 out/
 
+dev/docs/
+
 # Nuxt.js
 .nuxt/
 

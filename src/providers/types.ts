@@ -2,6 +2,8 @@
  * Shared types for all AI providers
  */
 
+import type { CostResult } from "@/utils/costTracker/types.js";
+
 export type Message = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -21,4 +23,20 @@ export type TokenUsage = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+};
+
+export type StreamingChunk = {
+  content: string;
+  role: string;
+};
+
+export type StreamingDoneEvent = {
+  usage: TokenUsage;
+  cost: CostResult | null;
+  latency_ms: number;
+};
+
+export type StreamingErrorEvent = {
+  error: string;
+  detail?: string;
 };
