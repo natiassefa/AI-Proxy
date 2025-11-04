@@ -142,9 +142,48 @@ Create a `mcp-servers.json` file at the project root:
     "transport": "stdio",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+  },
+  {
+    "name": "remote-http",
+    "transport": "http",
+    "url": "http://localhost:8000/mcp",
+    "headers": {
+      "Authorization": "Bearer your-token-here"
+    },
+    "timeout": 30000
+  },
+  {
+    "name": "remote-sse",
+    "transport": "sse",
+    "url": "http://localhost:8001",
+    "headers": {
+      "Authorization": "Bearer your-token-here"
+    },
+    "timeout": 30000,
+    "reconnectDelay": 1000,
+    "maxReconnectAttempts": 5
   }
 ]
 ```
+
+**Transport Types:**
+
+- **stdio**: Local process transport (requires `command` and `args`)
+- **http**: HTTP-based transport for remote servers (requires `url`)
+- **sse**: Server-Sent Events transport for remote servers (requires `url`)
+
+**Configuration Options:**
+
+- `name`: Unique identifier for the MCP server
+- `transport`: Transport type (`stdio`, `http`, or `sse`)
+- `url`: Server URL (required for `http` and `sse` transports)
+- `command`: Command to execute (required for `stdio` transport)
+- `args`: Command arguments (optional, for `stdio` transport)
+- `env`: Environment variables (optional, for `stdio` transport)
+- `headers`: HTTP headers (optional, for `http` and `sse` transports)
+- `timeout`: Request timeout in milliseconds (optional, default: 30000)
+- `reconnectDelay`: Initial reconnect delay in ms (optional, for `sse`, default: 1000)
+- `maxReconnectAttempts`: Maximum reconnect attempts (optional, for `sse`, default: 5)
 
 The server will automatically discover and connect to configured MCP servers on startup.
 
@@ -560,7 +599,9 @@ src/
 │   ├── manager.ts        # MCP server manager
 │   └── transport/         # MCP transport implementations
 │       ├── index.ts      # Transport factory
-│       └── stdio.ts      # Stdio transport
+│       ├── stdio.ts      # Stdio transport
+│       ├── http.ts       # HTTP transport
+│       └── sse.ts        # SSE transport
 ├── routes/                # API routes
 │   ├── chat.ts           # Chat completions endpoint
 │   ├── health.ts         # Health check endpoint
@@ -616,7 +657,7 @@ pnpm tsc --noEmit
 - **Caching**: Redis (ioredis)
 - **Logging**: Winston
 - **HTTP Client**: Axios
-- **MCP Protocol**: JSON-RPC 2.0 over stdio transport
+- **MCP Protocol**: JSON-RPC 2.0 over stdio, HTTP, or SSE transport
 
 ## 🤝 Contributing
 
@@ -635,7 +676,7 @@ We welcome contributions! This project is designed to be extensible and easy to 
 ### Areas for Contribution
 
 - **New Providers**: Add support for additional AI providers (Cohere, Google, etc.)
-- **MCP Enhancements**: HTTP/SSE transport support, resource handling, prompt templates
+- **MCP Enhancements**: Resource handling, prompt templates, WebSocket transport
 - **Pricing Updates**: Keep pricing data current as providers update their rates
 - **Features**: Caching improvements, rate limiting, request queuing, etc.
 - **Documentation**: Improve docs, add examples, tutorials

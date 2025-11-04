@@ -3,11 +3,28 @@
     "name": "filesystem",
     "transport": "stdio",
     "command": "npx",
-    "args": [
-      "-y",
-      "@modelcontextprotocol/server-filesystem",
-      "test-fs-root"
-    ]
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+  },
+  {
+    "name": "remote-http-server",
+    "transport": "http",
+    "url": "http://localhost:8000/mcp",
+    "headers": {
+      "Authorization": "Bearer your-token-here",
+      "Content-Type": "application/json"
+    },
+    "timeout": 30000
+  },
+  {
+    "name": "remote-sse-server",
+    "transport": "sse",
+    "url": "http://localhost:8001",
+    "headers": {
+      "Authorization": "Bearer your-token-here"
+    },
+    "timeout": 30000,
+    "reconnectDelay": 1000,
+    "maxReconnectAttempts": 5
   }
 ]
 
