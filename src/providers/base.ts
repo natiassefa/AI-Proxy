@@ -4,6 +4,9 @@ import { handleMistral } from "./mistral.js";
 import { trackCost, type CostResult } from "@/utils/costTracker/index.js";
 import type { Message, Provider, ProviderResponse } from "./types.js";
 
+// Export streaming handler
+export { handleStreamingRequest } from "./streaming/index.js";
+
 type ProviderResult = ProviderResponse & {
   cost: CostResult | null;
   latency_ms: number;

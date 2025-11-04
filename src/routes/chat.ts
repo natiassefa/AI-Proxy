@@ -1,8 +1,12 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { handleProviderRequest } from "@/providers/base.js";
+import {
+  handleProviderRequest,
+  handleStreamingRequest,
+} from "@/providers/base.js";
 import { cache } from "@/utils/cache.js";
 import { logger } from "@/utils/logger.js";
+import { sendSSEError } from "@/utils/sse.js";
 import {
   getSchemaDescription,
   getSchemaAsJSON,
@@ -17,6 +21,7 @@ const ChatSchema = z.object({
       content: z.string(),
     })
   ),
+  stream: z.boolean().optional(),
 });
 
 export async function registerChatRoute(app: FastifyInstance) {
@@ -37,7 +42,46 @@ export async function registerChatRoute(app: FastifyInstance) {
       });
     }
 
+    // Detect streaming request
+    const queryStream = (req.query as { stream?: string | boolean })?.stream;
+    const isStreaming =
+      queryStream === "true" ||
+      queryStream === true ||
+      parsed.data.stream === true;
+
     const { provider, model, messages } = parsed.data;
+
+    // Route to streaming handler if requested
+    if (isStreaming) {
+      // Set a reasonable timeout (e.g., 5 minutes)
+      req.raw.setTimeout(5 * 60 * 1000);
+
+      req.raw.on("timeout", () => {
+        logger.warn(`Streaming request timeout for ${provider}:${model}`);
+        if (!res.raw.writableEnded) {
+          sendSSEError(
+            res,
+            "Request timeout",
+            "Stream exceeded maximum duration"
+          );
+        }
+      });
+
+      try {
+        await handleStreamingRequest(provider, model, messages, res);
+      } catch (err: any) {
+        logger.error("Streaming error:", err);
+        if (!res.raw.writableEnded) {
+          return res.status(500).send({
+            error: "Streaming failed",
+            detail: err.message,
+          });
+        }
+      }
+      return; // Streaming handles its own response
+    }
+
+    // Existing non-streaming logic (unchanged)
     const cacheKey = `${provider}:${model}:${JSON.stringify(messages)}`;
 
     // Try to get from cache (returns null if Redis is not configured)

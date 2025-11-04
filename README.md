@@ -5,6 +5,7 @@ A unified Node.js API gateway for **OpenAI**, **Anthropic**, and **Mistral** wit
 ## ✨ Features
 
 - **Multi-Provider Support**: Unified interface for OpenAI, Anthropic (Claude), and Mistral AI
+- **Streaming Support (SSE)**: Real-time token streaming using Server-Sent Events for all providers
 - **Intelligent Caching**: Optional Redis caching to reduce API costs and improve response times
 - **Cost Tracking**: Detailed per-model cost tracking with breakdowns for input/output tokens
 - **Type-Safe**: Full TypeScript support with comprehensive type definitions
@@ -138,6 +139,8 @@ Response:
 
 ### Chat Completions
 
+**Non-Streaming (default):**
+
 ```bash
 curl -X POST http://localhost:8080/v1/chat \
   -H "Content-Type: application/json" \
@@ -149,6 +152,130 @@ curl -X POST http://localhost:8080/v1/chat \
     ]
   }'
 ```
+
+### Streaming Responses (SSE)
+
+Stream responses using Server-Sent Events (SSE) for real-time token delivery:
+
+**Request:**
+
+```bash
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/v1/chat?stream=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Tell me a story"}]
+  }'
+```
+
+**Or with `stream` in the request body:**
+
+```bash
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/v1/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "stream": true
+  }'
+```
+
+**Response (SSE format):**
+
+```
+event: chunk
+data: {"content":"Once","role":"assistant"}
+
+event: chunk
+data: {"content":" upon","role":"assistant"}
+
+event: chunk
+data: {"content":" a","role":"assistant"}
+
+event: done
+data: {"usage":{"prompt_tokens":10,"completion_tokens":150,"total_tokens":160},"cost":{"total_tokens":160,"estimated_cost_usd":"0.001600",...},"latency_ms":2345}
+```
+
+**JavaScript Client Example:**
+
+```javascript
+// Note: EventSource only supports GET requests, so for POST you'll need fetch or a library
+const response = await fetch("http://localhost:8080/v1/chat?stream=true", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    provider: "openai",
+    model: "gpt-4o",
+    messages: [{ role: "user", content: "Hello" }],
+  }),
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  const chunk = decoder.decode(value);
+  const lines = chunk.split("\n\n");
+
+  for (const line of lines) {
+    if (line.startsWith("event: chunk")) {
+      const dataLine = lines[lines.indexOf(line) + 1];
+      if (dataLine && dataLine.startsWith("data: ")) {
+        const data = JSON.parse(dataLine.slice(6));
+        console.log(data.content); // Accumulate content
+      }
+    } else if (line.startsWith("event: done")) {
+      const dataLine = lines[lines.indexOf(line) + 1];
+      if (dataLine && dataLine.startsWith("data: ")) {
+        const data = JSON.parse(dataLine.slice(6));
+        console.log("Usage:", data.usage);
+        console.log("Cost:", data.cost);
+      }
+    }
+  }
+}
+```
+
+**Python Client Example:**
+
+```python
+import requests
+import json
+
+url = "http://localhost:8080/v1/chat?stream=true"
+data = {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello"}]
+}
+
+response = requests.post(url, json=data, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        line = line.decode('utf-8')
+        if line.startswith('data: '):
+            try:
+                data = json.loads(line[6:])
+                print(data)
+            except json.JSONDecodeError:
+                pass
+```
+
+**Important Notes:**
+
+- **Streaming requests are not cached** - Each streaming request makes a fresh API call
+- The `stream` parameter can be passed as a query parameter (`?stream=true`) or in the request body (`"stream": true`)
+- Use `curl -N` flag to disable buffering and see chunks in real-time
+- **Postman and similar tools may buffer** the entire response - use `curl -N` or browser EventSource for real streaming
+- **Anthropic streaming**: Usage data is not available in streaming mode (will show zeros) - use non-streaming requests for accurate token counts
 
 ### Supported Providers and Models
 

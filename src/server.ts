@@ -1,8 +1,8 @@
 import Fastify from "fastify";
-import { checkConfig } from "@/config.js";
 import { registerChatRoute } from "./routes/chat.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { logger } from "./utils/logger.js";
+import { checkConfig } from "./config.js";
 
 export const buildServer = async () => {
   const app = Fastify({ logger: false });
@@ -14,8 +14,8 @@ export const buildServer = async () => {
 export const startServer = async () => {
   const app = await buildServer();
   const port = Number(process.env.PORT) || 8080;
+  checkConfig();
   try {
-    checkConfig();
     await app.listen({ port, host: "0.0.0.0" });
     logger.info(`🚀 AI Proxy running on http://localhost:${port}`);
   } catch (err) {
