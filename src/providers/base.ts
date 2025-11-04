@@ -3,6 +3,7 @@ import { handleAnthropic } from "./anthropic.js";
 import { handleMistral } from "./mistral.js";
 import { trackCost, type CostResult } from "@/utils/costTracker/index.js";
 import type { Message, Provider, ProviderResponse } from "./types.js";
+import type { Tool } from "@/utils/mcpToolConverter.js";
 
 // Export streaming handler
 export { handleStreamingRequest } from "./streaming/index.js";
@@ -15,20 +16,21 @@ type ProviderResult = ProviderResponse & {
 export async function handleProviderRequest(
   provider: Provider,
   model: string,
-  messages: Message[]
+  messages: Message[],
+  tools?: Tool[]
 ): Promise<ProviderResult> {
   const start = Date.now();
   let result: ProviderResponse;
 
   switch (provider) {
     case "openai":
-      result = await handleOpenAI(model, messages);
+      result = await handleOpenAI(model, messages, tools);
       break;
     case "anthropic":
-      result = await handleAnthropic(model, messages);
+      result = await handleAnthropic(model, messages, tools);
       break;
     case "mistral":
-      result = await handleMistral(model, messages);
+      result = await handleMistral(model, messages, tools);
       break;
     default:
       throw new Error(`Unknown provider: ${provider}`);

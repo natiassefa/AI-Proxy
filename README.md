@@ -8,6 +8,8 @@ A unified Node.js API gateway for **OpenAI**, **Anthropic**, and **Mistral** wit
 
 - **Multi-Provider Support**: Unified interface for OpenAI, Anthropic (Claude), and Mistral AI
 - **Streaming Support (SSE)**: Real-time token streaming using Server-Sent Events for all providers
+- **MCP Server Integration**: Connect to Model Context Protocol (MCP) servers for automatic tool execution
+- **Automatic Tool Execution**: AI models can automatically use MCP tools during conversations
 - **Intelligent Caching**: Optional Redis caching to reduce API costs and improve response times
 - **Cost Tracking**: Detailed per-model cost tracking with breakdowns for input/output tokens
 - **Type-Safe**: Full TypeScript support with comprehensive type definitions
@@ -53,6 +55,9 @@ MISTRAL_API_KEY=your_mistral_api_key_here
 # Optional: Redis Cache Configuration
 # For local Redis with Docker:
 REDIS_URL=redis://localhost:6379
+
+# Optional: MCP Servers Configuration
+# Create mcp-servers.json file at project root (see MCP section below)
 ```
 
 ### Running the Server
@@ -122,6 +127,106 @@ The cache will automatically:
 
 **Note**: If `REDIS_URL` is not set, the server will work normally without caching - no errors, no warnings, just direct API calls.
 
+## 🔌 MCP (Model Context Protocol) Server Support
+
+The proxy supports connecting to MCP servers to enable automatic tool execution. MCP servers expose tools and resources that AI models can use during conversations.
+
+### Configuration
+
+Create a `mcp-servers.json` file at the project root:
+
+```json
+[
+  {
+    "name": "filesystem",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+  }
+]
+```
+
+The server will automatically discover and connect to configured MCP servers on startup.
+
+### MCP API Endpoints
+
+**List all available MCP tools:**
+
+```bash
+curl http://localhost:8080/v1/mcp/tools
+```
+
+**Get tools for a specific server:**
+
+```bash
+curl http://localhost:8080/v1/mcp/filesystem/tools
+```
+
+**Get information about a specific tool:**
+
+```bash
+curl http://localhost:8080/v1/mcp/tools/read_file
+```
+
+**List MCP servers and their status:**
+
+```bash
+curl http://localhost:8080/v1/mcp/servers
+```
+
+**Call an MCP tool directly (for testing):**
+
+```bash
+curl -X POST http://localhost:8080/v1/mcp/tools/read_file/call \
+  -H "Content-Type: application/json" \
+  -d '{"arguments":{"path":"README.md"}}'
+```
+
+### Using MCP Tools in Chat
+
+Enable automatic tool execution by setting `useMcpTools: true`:
+
+```bash
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Read README.md and summarize it"}
+    ],
+    "useMcpTools": true
+  }'
+```
+
+**What happens automatically:**
+
+1. Proxy includes MCP tools in the request
+2. AI model requests a tool (e.g., `read_file`)
+3. Proxy executes the tool via MCP protocol
+4. Tool results are sent back to the model
+5. Model generates final response using tool results
+
+All tool execution happens automatically in a single request!
+
+**Example with filesystem server:**
+
+```bash
+# List directory contents
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "What files are in the current directory?"}
+    ],
+    "useMcpTools": true
+  }'
+```
+
+For more details, see [MCP_AUTOMATIC_TOOLS.md](./MCP_AUTOMATIC_TOOLS.md).
+
 ## 📡 API Usage
 
 ### Health Check
@@ -135,9 +240,16 @@ Response:
 ```json
 {
   "status": "ok",
-  "service": "AI Proxy"
+  "service": "AI Proxy",
+  "mcp": {
+    "enabled": true,
+    "serverCount": 2,
+    "toolCount": 15
+  }
 }
 ```
+
+The health check includes MCP status when MCP servers are configured.
 
 ### Chat Completions
 
@@ -154,6 +266,60 @@ curl -X POST http://localhost:8080/v1/chat \
     ]
   }'
 ```
+
+**With MCP Tools (Automatic Tool Execution):**
+
+```bash
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Read package.json and list the dependencies"}
+    ],
+    "useMcpTools": true
+  }'
+```
+
+When `useMcpTools: true` is set, the proxy automatically:
+
+- Includes all available MCP tools in the request
+- Executes tools when the model requests them
+- Returns tool results to the model
+- Continues the conversation until a final response
+
+**With Custom Tools:**
+
+```bash
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "What is the weather?"}
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get weather for a location",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            },
+            "required": ["location"]
+          }
+        }
+      }
+    ]
+  }'
+```
+
+**Note**: Custom tools must be executed by the client. Only MCP tools are automatically executed by the proxy.
 
 ### Streaming Responses (SSE)
 
@@ -382,10 +548,23 @@ src/
 │   ├── types.ts          # Shared provider types
 │   ├── openai.ts         # OpenAI integration
 │   ├── anthropic.ts      # Anthropic integration
-│   └── mistral.ts        # Mistral integration
+│   ├── mistral.ts        # Mistral integration
+│   └── streaming/        # Streaming implementations
+│       ├── index.ts      # Streaming router
+│       ├── openai.ts     # OpenAI streaming
+│       ├── anthropic.ts  # Anthropic streaming
+│       └── mistral.ts    # Mistral streaming
+├── mcp/                   # MCP (Model Context Protocol) support
+│   ├── types.ts          # MCP protocol types
+│   ├── client.ts         # MCP client base class
+│   ├── manager.ts        # MCP server manager
+│   └── transport/         # MCP transport implementations
+│       ├── index.ts      # Transport factory
+│       └── stdio.ts      # Stdio transport
 ├── routes/                # API routes
 │   ├── chat.ts           # Chat completions endpoint
-│   └── health.ts         # Health check endpoint
+│   ├── health.ts         # Health check endpoint
+│   └── mcp.ts            # MCP API endpoints
 └── utils/                 # Utility modules
     ├── cache.ts          # Redis caching
     ├── costTracker/      # Cost tracking module
@@ -394,7 +573,9 @@ src/
     │   ├── pricing/      # Provider pricing data
     │   └── calculators/  # Cost calculation logic
     ├── logger.ts         # Winston logger
-    └── schemaFormatter.ts # Schema validation helpers
+    ├── schemaFormatter.ts # Schema validation helpers
+    ├── sse.ts            # SSE utilities
+    └── mcpToolConverter.ts # MCP tool conversion utilities
 ```
 
 ## 💰 Cost Tracking
@@ -435,6 +616,7 @@ pnpm tsc --noEmit
 - **Caching**: Redis (ioredis)
 - **Logging**: Winston
 - **HTTP Client**: Axios
+- **MCP Protocol**: JSON-RPC 2.0 over stdio transport
 
 ## 🤝 Contributing
 
@@ -453,6 +635,7 @@ We welcome contributions! This project is designed to be extensible and easy to 
 ### Areas for Contribution
 
 - **New Providers**: Add support for additional AI providers (Cohere, Google, etc.)
+- **MCP Enhancements**: HTTP/SSE transport support, resource handling, prompt templates
 - **Pricing Updates**: Keep pricing data current as providers update their rates
 - **Features**: Caching improvements, rate limiting, request queuing, etc.
 - **Documentation**: Improve docs, add examples, tutorials
@@ -481,10 +664,16 @@ Feel free to open an issue for:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## 📚 Additional Documentation
+
+- **[MCP_AUTOMATIC_TOOLS.md](./src/mcp/MCP_AUTOMATIC_TOOLS.md)**: Complete guide to automatic MCP tool execution
+- **[mcp-servers.json.example](./mcp-servers.json.example)**: Example MCP server configuration
+
 ## 🙏 Acknowledgments
 
 - OpenAI, Anthropic, and Mistral for their excellent AI APIs
 - The Fastify team for the amazing web framework
+- The Model Context Protocol team for the MCP specification
 - All contributors who help improve this project
 
 ---

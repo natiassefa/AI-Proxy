@@ -97,3 +97,4 @@ dev/docs/
 # TypeScript
 *.tsbuildinfo
 
+mcp-servers.json
