@@ -1,7 +1,8 @@
 import axios from "axios";
 import { Readable } from "stream";
 import { config } from "@/config.js";
-import type { Message } from "../types.js";
+import { toolsToMistral, messagesToMistral } from "../tools/converter.js";
+import type { Message, Tool } from "../types.js";
 import type { FastifyReply } from "fastify";
 import { sendSSEChunk, sendSSEEnd, sendSSEError } from "@/utils/sse.js";
 import { logger } from "@/utils/logger.js";
@@ -16,6 +17,15 @@ type MistralStreamChunk = {
     delta: {
       role?: string;
       content?: string;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        type?: string;
+        function?: {
+          name?: string;
+          arguments?: string;
+        };
+      }>;
     };
     index: number;
     finish_reason?: string | null;
@@ -30,7 +40,8 @@ type MistralStreamChunk = {
 export async function handleMistralStream(
   model: string,
   messages: Message[],
-  res: FastifyReply
+  res: FastifyReply,
+  tools?: Tool[]
 ): Promise<void> {
   const startTime = Date.now();
   logger.info(`Starting Mistral stream for model ${model}`);
@@ -47,13 +58,20 @@ export async function handleMistralStream(
   }
 
   try {
+    const requestBody: any = {
+      model,
+      messages: messagesToMistral(messages),
+      stream: true,
+    };
+
+    // Add tools if provided
+    if (tools && tools.length > 0) {
+      requestBody.tools = toolsToMistral(tools);
+    }
+
     const response = await axios.post(
       "https://api.mistral.ai/v1/chat/completions",
-      {
-        model,
-        messages,
-        stream: true,
-      },
+      requestBody,
       {
         headers: {
           Authorization: `Bearer ${config.mistralKey}`,
@@ -95,6 +113,7 @@ export async function handleMistralStream(
     }
 
     let accumulatedContent = "";
+    let accumulatedToolCalls: any[] = [];
     let usage: {
       prompt_tokens: number;
       completion_tokens: number;
@@ -127,6 +146,14 @@ export async function handleMistralStream(
                 finalUsage,
                 model
               );
+              const finalToolCalls =
+                accumulatedToolCalls.length > 0
+                  ? accumulatedToolCalls.map((tc: any) => ({
+                      id: tc.id,
+                      type: tc.type,
+                      function: tc.function,
+                    }))
+                  : undefined;
               logger.info(
                 `Completed Mistral stream, tokens: ${
                   finalUsage.total_tokens
@@ -136,6 +163,7 @@ export async function handleMistralStream(
                 usage: finalUsage,
                 cost,
                 latency_ms: duration,
+                tool_calls: finalToolCalls,
               });
               resolve();
               return;
@@ -144,12 +172,50 @@ export async function handleMistralStream(
             try {
               const parsed: MistralStreamChunk = JSON.parse(data);
 
+              // Handle content chunks
               if (parsed.choices?.[0]?.delta?.content) {
                 const content = parsed.choices[0].delta.content;
                 accumulatedContent += content;
                 sendSSEChunk(res, {
                   content,
                   role: parsed.choices[0].delta.role || "assistant",
+                });
+              }
+
+              // Handle tool call chunks
+              if (parsed.choices?.[0]?.delta?.tool_calls) {
+                const toolCallDelta = parsed.choices[0].delta.tool_calls;
+                toolCallDelta.forEach((delta: any) => {
+                  const index = delta.index;
+                  if (!accumulatedToolCalls[index]) {
+                    accumulatedToolCalls[index] = {
+                      id: delta.id || "",
+                      type: delta.type || "function",
+                      function: { name: "", arguments: "" },
+                    };
+                  }
+                  if (delta.function?.name) {
+                    accumulatedToolCalls[index].function.name +=
+                      delta.function.name;
+                  }
+                  if (delta.function?.arguments) {
+                    accumulatedToolCalls[index].function.arguments +=
+                      delta.function.arguments;
+                  }
+                  if (delta.id) {
+                    accumulatedToolCalls[index].id = delta.id;
+                  }
+
+                  // Send tool call chunk event
+                  sendSSEChunk(
+                    res,
+                    {
+                      type: "tool_call_delta",
+                      tool_call_index: index,
+                      delta: delta,
+                    },
+                    "tool_call"
+                  );
                 });
               }
 
@@ -182,6 +248,14 @@ export async function handleMistralStream(
             finalUsage,
             model
           );
+          const finalToolCalls =
+            accumulatedToolCalls.length > 0
+              ? accumulatedToolCalls.map((tc: any) => ({
+                  id: tc.id,
+                  type: tc.type,
+                  function: tc.function,
+                }))
+              : undefined;
           logger.info(
             `Completed Mistral stream, tokens: ${
               finalUsage.total_tokens
@@ -191,6 +265,7 @@ export async function handleMistralStream(
             usage: finalUsage,
             cost,
             latency_ms: duration,
+            tool_calls: finalToolCalls,
           });
         }
         resolve();

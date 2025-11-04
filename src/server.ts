@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { registerChatRoute } from "./routes/chat.js";
 import { registerHealthRoute } from "./routes/health.js";
+import { registerToolsRoute } from "./routes/tools.js";
 import { logger } from "./utils/logger.js";
 import { checkConfig } from "./config.js";
 
@@ -8,6 +9,7 @@ export const buildServer = async () => {
   const app = Fastify({ logger: false });
   app.register(registerHealthRoute);
   app.register(registerChatRoute, { prefix: "/v1" });
+  app.register(registerToolsRoute, { prefix: "/v1" });
   return app;
 };
 

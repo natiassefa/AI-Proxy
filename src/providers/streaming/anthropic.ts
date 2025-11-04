@@ -1,7 +1,8 @@
 import axios from "axios";
 import { Readable } from "stream";
 import { config } from "@/config.js";
-import type { Message } from "../types.js";
+import { toolsToAnthropic, messagesToAnthropic } from "../tools/converter.js";
+import type { Message, Tool } from "../types.js";
 import type { FastifyReply } from "fastify";
 import { sendSSEChunk, sendSSEEnd, sendSSEError } from "@/utils/sse.js";
 import { logger } from "@/utils/logger.js";
@@ -16,12 +17,19 @@ type AnthropicStreamEvent =
   | {
       type: "content_block_start";
       index: number;
-      content_block: { type: string };
+      content_block: {
+        type: string;
+        id?: string;
+        name?: string;
+      };
     }
   | {
       type: "content_block_delta";
       index: number;
-      delta: { type: string; text?: string };
+      delta: {
+        type: string;
+        text?: string;
+      };
     }
   | { type: "content_block_stop"; index: number }
   | {
@@ -37,7 +45,8 @@ type AnthropicStreamEvent =
 export async function handleAnthropicStream(
   model: string,
   messages: Message[],
-  res: FastifyReply
+  res: FastifyReply,
+  tools?: Tool[]
 ): Promise<void> {
   const startTime = Date.now();
   logger.info(`Starting Anthropic stream for model ${model}`);
@@ -54,14 +63,21 @@ export async function handleAnthropicStream(
   }
 
   try {
+    const requestBody: any = {
+      model,
+      max_tokens: 4096,
+      messages: messagesToAnthropic(messages),
+      stream: true, // Explicitly enable streaming
+    };
+
+    // Add tools if provided
+    if (tools && tools.length > 0) {
+      requestBody.tools = toolsToAnthropic(tools);
+    }
+
     const response = await axios.post(
       "https://api.anthropic.com/v1/messages",
-      {
-        model,
-        max_tokens: 4096,
-        messages,
-        stream: true, // Explicitly enable streaming
-      },
+      requestBody,
       {
         headers: {
           "x-api-key": config.anthropicKey,
@@ -104,6 +120,7 @@ export async function handleAnthropicStream(
     }
 
     let accumulatedContent = "";
+    let accumulatedToolCalls: any[] = [];
     let usage: { input_tokens: number; output_tokens: number } | null = null;
 
     const stream = response.data as Readable;
@@ -133,12 +150,60 @@ export async function handleAnthropicStream(
               const parsed: AnthropicStreamEvent = JSON.parse(data);
               logger.debug(`Anthropic stream event: ${parsed.type}`);
 
+              // Handle text content
               if (parsed.type === "content_block_delta" && parsed.delta.text) {
                 accumulatedContent += parsed.delta.text;
                 sendSSEChunk(res, {
                   content: parsed.delta.text,
                   role: "assistant",
                 });
+              }
+
+              // Handle tool use start
+              if (
+                parsed.type === "content_block_start" &&
+                parsed.content_block?.type === "tool_use"
+              ) {
+                accumulatedToolCalls.push({
+                  id: parsed.content_block.id || "",
+                  name: parsed.content_block.name || "",
+                  inputRaw: "",
+                });
+                sendSSEChunk(
+                  res,
+                  {
+                    type: "tool_use_start",
+                    tool_use_id: parsed.content_block.id,
+                    name: parsed.content_block.name,
+                  },
+                  "tool_call"
+                );
+              }
+
+              // Handle tool use delta
+              if (
+                parsed.type === "content_block_delta" &&
+                parsed.delta?.type === "input_json_delta"
+              ) {
+                const toolUseIndex = accumulatedToolCalls.length - 1;
+                if (toolUseIndex >= 0 && parsed.delta.text) {
+                  // Accumulate JSON input
+                  if (!accumulatedToolCalls[toolUseIndex].inputRaw) {
+                    accumulatedToolCalls[toolUseIndex].inputRaw = "";
+                  }
+                  accumulatedToolCalls[toolUseIndex].inputRaw +=
+                    parsed.delta.text;
+
+                  sendSSEChunk(
+                    res,
+                    {
+                      type: "tool_use_delta",
+                      tool_use_id: accumulatedToolCalls[toolUseIndex].id,
+                      delta: parsed.delta.text,
+                    },
+                    "tool_call"
+                  );
+                }
               }
 
               // Capture usage from message_stop event
@@ -195,6 +260,30 @@ export async function handleAnthropicStream(
                     )
                   : null;
 
+                // Parse accumulated tool calls
+                const finalToolCalls = accumulatedToolCalls.map((tu: any) => {
+                  try {
+                    const input = tu.inputRaw ? JSON.parse(tu.inputRaw) : {};
+                    return {
+                      id: tu.id,
+                      type: "function",
+                      function: {
+                        name: tu.name,
+                        arguments: JSON.stringify(input),
+                      },
+                    };
+                  } catch {
+                    return {
+                      id: tu.id,
+                      type: "function",
+                      function: {
+                        name: tu.name,
+                        arguments: JSON.stringify({}),
+                      },
+                    };
+                  }
+                });
+
                 if (usage) {
                   logger.info(
                     `Completed Anthropic stream, tokens: ${
@@ -211,6 +300,8 @@ export async function handleAnthropicStream(
                   usage: finalUsage,
                   cost,
                   latency_ms: duration,
+                  tool_calls:
+                    finalToolCalls.length > 0 ? finalToolCalls : undefined,
                 });
                 resolve();
                 return;

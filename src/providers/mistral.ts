@@ -1,6 +1,11 @@
 import axios from "axios";
 import { config } from "@/config.js";
-import type { Message, ProviderResponse } from "./types.js";
+import {
+  toolsToMistral,
+  messagesToMistral,
+  mistralToolCallsToUnified,
+} from "./tools/converter.js";
+import type { Message, ProviderResponse, Tool } from "./types.js";
 
 type MistralUsage = {
   prompt_tokens: number;
@@ -12,7 +17,15 @@ type MistralResponse = {
   choices: Array<{
     message: {
       role: string;
-      content: string;
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: {
+          name: string;
+          arguments: string;
+        };
+      }>;
     };
   }>;
   usage: MistralUsage;
@@ -20,11 +33,22 @@ type MistralResponse = {
 
 export async function handleMistral(
   model: string,
-  messages: Message[]
+  messages: Message[],
+  tools?: Tool[]
 ): Promise<ProviderResponse> {
+  const requestBody: any = {
+    model,
+    messages: messagesToMistral(messages),
+  };
+
+  // Add tools if provided
+  if (tools && tools.length > 0) {
+    requestBody.tools = toolsToMistral(tools);
+  }
+
   const response = await axios.post<MistralResponse>(
     "https://api.mistral.ai/v1/chat/completions",
-    { model, messages },
+    requestBody,
     {
       headers: {
         Authorization: `Bearer ${config.mistralKey}`,
@@ -34,6 +58,13 @@ export async function handleMistral(
   );
 
   const { choices, usage } = response.data;
+  const message = choices?.[0]?.message || { role: "assistant", content: "" };
+
+  // Extract tool calls if present
+  const toolCalls = mistralToolCallsToUnified(choices);
+
+  // Extract content (may be null if only tool calls)
+  const content = message.content || null;
 
   // Extract token usage - Mistral provides prompt_tokens, completion_tokens, and total_tokens
   const tokenUsage: MistralUsage = {
@@ -44,7 +75,11 @@ export async function handleMistral(
 
   return {
     provider: "mistral",
-    message: choices?.[0]?.message || { role: "assistant", content: "" },
+    message: {
+      role: message.role,
+      content: content,
+      tool_calls: toolCalls,
+    },
     usage: tokenUsage,
   };
 }

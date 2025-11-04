@@ -8,6 +8,8 @@ A unified Node.js API gateway for **OpenAI**, **Anthropic**, and **Mistral** wit
 
 - **Multi-Provider Support**: Unified interface for OpenAI, Anthropic (Claude), and Mistral AI
 - **Streaming Support (SSE)**: Real-time token streaming using Server-Sent Events for all providers
+- **Tool Usage (Function Calling)**: Support for tool/function calling across all providers with unified format
+- **Tool Discovery**: Query tool support availability for specific provider/model combinations
 - **Intelligent Caching**: Optional Redis caching to reduce API costs and improve response times
 - **Cost Tracking**: Detailed per-model cost tracking with breakdowns for input/output tokens
 - **Type-Safe**: Full TypeScript support with comprehensive type definitions
@@ -279,6 +281,200 @@ for line in response.iter_lines():
 - **Postman and similar tools may buffer** the entire response - use `curl -N` or browser EventSource for real streaming
 - **Anthropic streaming**: Usage data is not available in streaming mode (will show zeros) - use non-streaming requests for accurate token counts
 
+### Tool Usage (Function Calling)
+
+The proxy supports tool/function calling for all providers, allowing models to request execution of external functions and receive their results.
+
+#### Request Format
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather in San Francisco?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ]
+}
+```
+
+#### Response with Tool Calls
+
+When the model decides to call a tool, the response includes `tool_calls`:
+
+```json
+{
+  "provider": "openai",
+  "message": {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_abc123",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"location\": \"San Francisco, CA\"}"
+        }
+      }
+    ]
+  },
+  "usage": { ... },
+  "cost": { ... },
+  "latency_ms": 1234
+}
+```
+
+#### Sending Tool Results
+
+After executing the tool, send the result back in the next request:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather in San Francisco?"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"location\": \"San Francisco, CA\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_abc123",
+      "content": "72°F, sunny"
+    }
+  ],
+  "tools": [ ... ]
+}
+```
+
+#### Streaming with Tools
+
+Tool calls in streaming mode are sent as separate SSE events:
+
+```
+event: tool_call
+data: {"type":"tool_call_delta","tool_call_index":0,"delta":{"index":0,"id":"call_abc123","function":{"name":"get_weather"}}}
+
+event: chunk
+data: {"content":"", "role":"assistant"}
+
+event: done
+data: {"usage":{...},"cost":{...},"latency_ms":1234,"tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"San Francisco, CA\"}"}}]}
+```
+
+#### Provider Differences
+
+- **OpenAI/Mistral**: Use `tool_calls` array in assistant messages, `tool` role for results
+- **Anthropic**: Uses `tool_use` content blocks in assistant messages, `tool_result` content blocks for results
+
+The proxy normalizes these differences into a unified format.
+
+#### Tool Availability Discovery
+
+Before using tools, you can check if a model supports tools:
+
+```bash
+# Check if a specific model supports tools
+curl "http://localhost:8080/v1/tools?provider=openai&model=gpt-4o"
+
+# Get all models with tool support for a provider
+curl "http://localhost:8080/v1/tools?provider=openai"
+
+# Alternative route format
+curl "http://localhost:8080/v1/tools/openai/gpt-4o"
+```
+
+#### Complete Example
+
+```bash
+# Step 0: Check if model supports tools (optional)
+curl "http://localhost:8080/v1/tools?provider=openai&model=gpt-4o"
+
+# Step 1: Request with tools
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string"}
+          },
+          "required": ["location"]
+        }
+      }
+    }]
+  }'
+
+# Step 2: Model responds with tool call
+# Response includes tool_calls array
+
+# Step 3: Execute tool and send result back
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "What is the weather in San Francisco?"},
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [{"id": "call_abc123", "type": "function", "function": {"name": "get_weather", "arguments": "{\"location\": \"San Francisco\"}"}}]
+      },
+      {"role": "tool", "tool_call_id": "call_abc123", "content": "72°F, sunny"}
+    ],
+    "tools": [ ... ]
+  }'
+```
+
 ### Supported Providers and Models
 
 **OpenAI:**
@@ -385,7 +581,12 @@ src/
 │   └── mistral.ts        # Mistral integration
 ├── routes/                # API routes
 │   ├── chat.ts           # Chat completions endpoint
-│   └── health.ts         # Health check endpoint
+│   ├── health.ts         # Health check endpoint
+│   └── tools.ts          # Tool availability discovery endpoint
+├── providers/             # AI provider implementations
+│   ├── tools/            # Tool format converters
+│   │   ├── converter.ts  # Provider-specific format conversions
+│   │   └── metadata.ts   # Tool support metadata
 └── utils/                 # Utility modules
     ├── cache.ts          # Redis caching
     ├── costTracker/      # Cost tracking module

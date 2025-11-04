@@ -1,4 +1,4 @@
-import type { Provider, Message } from "../types.js";
+import type { Provider, Message, Tool } from "../types.js";
 import type { FastifyReply } from "fastify";
 import { handleOpenAIStream } from "./openai.js";
 import { handleAnthropicStream } from "./anthropic.js";
@@ -10,7 +10,8 @@ export async function handleStreamingRequest(
   provider: Provider,
   model: string,
   messages: Message[],
-  res: FastifyReply
+  res: FastifyReply,
+  tools?: Tool[]
 ): Promise<void> {
   // Set SSE headers
   setSSEHeaders(res);
@@ -18,13 +19,13 @@ export async function handleStreamingRequest(
   try {
     switch (provider) {
       case "openai":
-        await handleOpenAIStream(model, messages, res);
+        await handleOpenAIStream(model, messages, res, tools);
         break;
       case "anthropic":
-        await handleAnthropicStream(model, messages, res);
+        await handleAnthropicStream(model, messages, res, tools);
         break;
       case "mistral":
-        await handleMistralStream(model, messages, res);
+        await handleMistralStream(model, messages, res, tools);
         break;
       default:
         throw new Error(`Unknown provider: ${provider}`);

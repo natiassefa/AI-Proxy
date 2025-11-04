@@ -1,6 +1,11 @@
 import axios from "axios";
 import { config } from "@/config.js";
-import type { Message, ProviderResponse } from "./types.js";
+import {
+  toolsToOpenAI,
+  messagesToOpenAI,
+  openAIToolCallsToUnified,
+} from "./tools/converter.js";
+import type { Message, ProviderResponse, Tool } from "./types.js";
 
 type OpenAIUsage = {
   prompt_tokens: number;
@@ -12,7 +17,15 @@ type OpenAIResponse = {
   choices: Array<{
     message: {
       role: string;
-      content: string;
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: {
+          name: string;
+          arguments: string;
+        };
+      }>;
     };
   }>;
   usage: OpenAIUsage;
@@ -20,11 +33,22 @@ type OpenAIResponse = {
 
 export async function handleOpenAI(
   model: string,
-  messages: Message[]
+  messages: Message[],
+  tools?: Tool[]
 ): Promise<ProviderResponse> {
+  const requestBody: any = {
+    model,
+    messages: messagesToOpenAI(messages),
+  };
+
+  // Add tools if provided
+  if (tools && tools.length > 0) {
+    requestBody.tools = toolsToOpenAI(tools);
+  }
+
   const response = await axios.post<OpenAIResponse>(
     "https://api.openai.com/v1/chat/completions",
-    { model, messages },
+    requestBody,
     {
       headers: {
         Authorization: `Bearer ${config.openaiKey}`,
@@ -34,6 +58,13 @@ export async function handleOpenAI(
   );
 
   const { choices, usage } = response.data;
+  const message = choices?.[0]?.message || { role: "assistant", content: "" };
+
+  // Extract tool calls if present
+  const toolCalls = openAIToolCallsToUnified(choices);
+
+  // Extract content (may be null if only tool calls)
+  const content = message.content || null;
 
   // Extract token usage - OpenAI provides prompt_tokens, completion_tokens, and total_tokens
   const tokenUsage: OpenAIUsage = {
@@ -44,7 +75,11 @@ export async function handleOpenAI(
 
   return {
     provider: "openai",
-    message: choices?.[0]?.message || { role: "assistant", content: "" },
+    message: {
+      role: message.role,
+      content: content,
+      tool_calls: toolCalls,
+    },
     usage: tokenUsage,
   };
 }
