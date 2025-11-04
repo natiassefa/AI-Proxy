@@ -3,17 +3,34 @@
  */
 
 import type { CostResult } from "@/utils/costTracker/types.js";
+import type { Tool } from "@/utils/mcpToolConverter.js";
 
 export type Message = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
+};
+
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string; // JSON string
+  };
 };
 
 export type Provider = "openai" | "anthropic" | "mistral";
 
 export type ProviderResponse = {
   provider: string;
-  message: { role: string; content: string };
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: ToolCall[];
+  };
   usage: TokenUsage;
 };
 
