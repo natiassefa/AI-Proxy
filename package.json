@@ -2,6 +2,7 @@
   "name": "@aiproxy/server",
   "version": "0.2.0",
   "type": "module",
+  "license": "MIT",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
