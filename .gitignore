@@ -98,3 +98,4 @@ dev/docs/
 *.tsbuildinfo
 
 mcp-servers.json
+.early.coverage
